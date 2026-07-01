@@ -264,12 +264,12 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Prime proxy list on boot
-refreshProxyList().then(() => {
-  app.listen(PORT, () => {
-    console.log(`\n🚀 CineRift Stream Backend is running on port ${PORT}`);
-    console.log(`🔌 API endpoint (Play): http://localhost:${PORT}/api/play`);
-    console.log(`🔌 API endpoint (Caption): http://localhost:${PORT}/api/caption`);
-    console.log(`🔌 API endpoint (CORS Proxy): http://localhost:${PORT}/api/proxy?url=ENCODED_URL\n`);
-  });
+app.listen(PORT, () => {
+  console.log(`\n🚀 CineRift Stream Backend is running on port ${PORT}`);
+  console.log(`🔌 API endpoint (Play): http://localhost:${PORT}/api/play`);
+  console.log(`🔌 API endpoint (Caption): http://localhost:${PORT}/api/caption`);
+  console.log(`🔌 API endpoint (CORS Proxy): http://localhost:${PORT}/api/proxy?url=ENCODED_URL\n`);
+  
+  // Prime the proxy list asynchronously in the background
+  refreshProxyList();
 });
