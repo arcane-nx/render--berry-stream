@@ -21,6 +21,84 @@ app.use((req, res, next) => {
   next();
 });
 
+// Proxy Rotation State
+let proxyList = [];
+let activeProxy = null; // Currently cached working proxy
+
+// Fetch free public HTTP proxies
+async function refreshProxyList() {
+  console.log('[Proxy Rotator] Fetching free proxy list...');
+  try {
+    const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=3000&country=all&ssl=yes&anonymity=anonymous', { timeout: 8000 });
+    const list = res.data.split('\n').map(p => p.trim()).filter(Boolean);
+    if (list.length > 0) {
+      proxyList = list;
+      console.log(`[Proxy Rotator] Successfully loaded ${list.length} proxies.`);
+    }
+  } catch (err) {
+    console.error('[Proxy Rotator] Failed to fetch proxy list:', err.message);
+  }
+}
+
+// Perform request through proxy rotating fallback
+async function requestWithProxy(targetUrl, axiosConfig = {}) {
+  // If we already have a cached working proxy, try it first to keep response times fast!
+  if (activeProxy) {
+    const [host, port] = activeProxy.split(':');
+    try {
+      const response = await axios({
+        ...axiosConfig,
+        url: targetUrl,
+        proxy: { host, port: parseInt(port) },
+        timeout: 6000
+      });
+      return response;
+    } catch (e) {
+      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} failed: ${e.message}. Removing from cache.`);
+      activeProxy = null;
+    }
+  }
+
+  // Load proxy list if empty
+  if (proxyList.length === 0) {
+    await refreshProxyList();
+  }
+
+  // Loop through proxy list and test up to 10 random proxies
+  const shuffled = [...proxyList].sort(() => 0.5 - Math.random()).slice(0, 15);
+  for (const proxyStr of shuffled) {
+    const [host, port] = proxyStr.split(':');
+    console.log(`[Proxy Rotator] Testing proxy: ${proxyStr} for URL: ${targetUrl}`);
+    try {
+      const response = await axios({
+        ...axiosConfig,
+        url: targetUrl,
+        proxy: { host, port: parseInt(port) },
+        timeout: 5000
+      });
+      
+      // Found a working proxy! Cache it.
+      activeProxy = proxyStr;
+      console.log(`[Proxy Rotator] Cached working proxy: ${proxyStr}`);
+      return response;
+    } catch (e) {
+      // Remove failed proxy from local list
+      proxyList = proxyList.filter(p => p !== proxyStr);
+    }
+  }
+
+  // Last resort: Fallback to direct request (might fail with 403 on hosting provider, but acts as final option)
+  console.warn('[Proxy Rotator] No working proxies found. Attempting direct connection...');
+  return await axios({
+    ...axiosConfig,
+    url: targetUrl,
+    timeout: 8000
+  });
+}
+
+// Periodically refresh the proxy list pool every 15 minutes
+setInterval(refreshProxyList, 900000);
+
 // Helper: Verify if URL is valid HTTP/HTTPS
 function isProxyableUrl(rawUrl) {
   try {
@@ -43,18 +121,18 @@ app.get('/api/play', async (req, res) => {
   const episode = ep || 0;
 
   const playUrl = `https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=${subjectId}&se=${season}&ep=${episode}&detailPath=${detailPath}`;
-  console.log(`[Proxy Play] Fetching play info: ${detailPath} (se: ${season}, ep: ${episode})`);
+  console.log(`[Proxy Play] Requesting: ${detailPath} (se: ${season}, ep: ${episode})`);
 
   try {
-    const response = await axios.get(playUrl, {
+    const response = await requestWithProxy(playUrl, {
+      method: 'get',
       headers: {
         'User-Agent': SCRAPE_HEADERS['User-Agent'],
         'Accept': 'application/json, text/plain, */*',
         'Referer': `https://netfilm.world/spa/videoPlayPage/${cat}/${detailPath}`,
         'X-Source': 'aisearch_hola',
         'X-Client-Info': JSON.stringify({ timezone: 'Asia/Singapore' })
-      },
-      timeout: 10000
+      }
     });
 
     res.json({ success: true, data: response.data?.data });
@@ -74,18 +152,18 @@ app.get('/api/caption', async (req, res) => {
   const cat = category || 'movies';
   const fmt = format || 'MP4';
   const captionUrl = `https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/caption?format=${fmt}&id=${id}&subjectId=${subjectId}&detailPath=${detailPath}`;
-  console.log(`[Proxy Caption] Fetching captions for stream ID: ${id}`);
+  console.log(`[Proxy Caption] Requesting captions for stream ID: ${id}`);
 
   try {
-    const response = await axios.get(captionUrl, {
+    const response = await requestWithProxy(captionUrl, {
+      method: 'get',
       headers: {
         'User-Agent': SCRAPE_HEADERS['User-Agent'],
         'Accept': 'application/json, text/plain, */*',
         'Referer': `https://netfilm.world/spa/videoPlayPage/${cat}/${detailPath}`,
         'X-Source': 'aisearch_hola',
         'X-Client-Info': JSON.stringify({ timezone: 'Asia/Singapore' })
-      },
-      timeout: 10000
+      }
     });
 
     res.json({ success: true, data: response.data?.data });
@@ -112,12 +190,14 @@ app.get('/api/proxy', async (req, res) => {
     'Referer': 'https://netfilm.world/'
   };
 
-  // Support range requests for video seeking/scrubbing
   if (req.headers.range) {
     headers['Range'] = req.headers.range;
   }
 
   try {
+    // Note: Streaming video segments (.ts / .mp4) do not need to use proxy rotation,
+    // because video CDNs (like aoneroom / hakunaymatata) do not block hosting provider IPs!
+    // CDNs only verify the User-Agent / Referer, which we forward.
     const response = await axios({
       method: 'get',
       url: targetUrl.href,
@@ -132,7 +212,6 @@ app.get('/api/proxy', async (req, res) => {
     if (contentType.includes('application/x-mpegURL') || contentType.includes('application/vnd.apple.mpegurl') || targetUrl.pathname.endsWith('.m3u8')) {
       let text = '';
       
-      // Buffer the stream into text
       await new Promise((resolve, reject) => {
         response.data.on('data', chunk => { text += chunk.toString(); });
         response.data.on('end', resolve);
@@ -159,7 +238,6 @@ app.get('/api/proxy', async (req, res) => {
       return res.send(rewrittenLines.join('\n'));
     }
 
-    // Forward standard segment chunks (.ts / .mp4)
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.status(response.status);
     
@@ -182,9 +260,12 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 CineRift Stream Backend is running on port ${PORT}`);
-  console.log(`🔌 API endpoint (Play): http://localhost:${PORT}/api/play`);
-  console.log(`🔌 API endpoint (Caption): http://localhost:${PORT}/api/caption`);
-  console.log(`🔌 API endpoint (CORS Proxy): http://localhost:${PORT}/api/proxy?url=ENCODED_URL\n`);
+// Prime proxy list on boot
+refreshProxyList().then(() => {
+  app.listen(PORT, () => {
+    console.log(`\n🚀 CineRift Stream Backend is running on port ${PORT}`);
+    console.log(`🔌 API endpoint (Play): http://localhost:${PORT}/api/play`);
+    console.log(`🔌 API endpoint (Caption): http://localhost:${PORT}/api/caption`);
+    console.log(`🔌 API endpoint (CORS Proxy): http://localhost:${PORT}/api/proxy?url=ENCODED_URL\n`);
+  });
 });
