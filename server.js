@@ -180,84 +180,7 @@ app.get('/api/caption', async (req, res) => {
   }
 });
 
-// 3. CORS Proxy for .m3u8 Playlist & .ts Stream Chunks
-app.get('/api/proxy', async (req, res) => {
-  const targetUrlStr = req.query.url;
-  if (!targetUrlStr) {
-    return res.status(400).send('Missing target url query parameter.');
-  }
 
-  if (!isProxyableUrl(targetUrlStr)) {
-    return res.status(403).send('Refused: invalid URL scheme.');
-  }
-
-  const targetUrl = new URL(targetUrlStr);
-  const headers = {
-    'User-Agent': SCRAPE_HEADERS['User-Agent'],
-    'Referer': 'https://netfilm.world/'
-  };
-
-  if (req.headers.range) {
-    headers['Range'] = req.headers.range;
-  }
-
-  try {
-    const response = await axios({
-      method: 'get',
-      url: targetUrl.href,
-      headers: headers,
-      responseType: 'stream',
-      timeout: 25000
-    });
-
-    const contentType = response.headers['content-type'] || '';
-    
-    // Intercept M3U8 files to rewrite relative chunk paths
-    if (contentType.includes('application/x-mpegURL') || contentType.includes('application/vnd.apple.mpegurl') || targetUrl.pathname.endsWith('.m3u8')) {
-      let text = '';
-      
-      await new Promise((resolve, reject) => {
-        response.data.on('data', chunk => { text += chunk.toString(); });
-        response.data.on('end', resolve);
-        response.data.on('error', reject);
-      });
-
-      const lines = text.split('\n');
-      const rewrittenLines = lines.map(line => {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          try {
-            const absolute = new URL(trimmed, targetUrl.href).href;
-            const selfUrl = `${req.protocol}://${req.get('host')}/api/proxy?url=${encodeURIComponent(absolute)}`;
-            return selfUrl;
-          } catch (e) {
-            return line;
-          }
-        }
-        return line;
-      });
-
-      res.setHeader('Content-Type', 'application/x-mpegURL');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      return res.send(rewrittenLines.join('\n'));
-    }
-
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.status(response.status);
-    
-    const headersToCopy = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
-    headersToCopy.forEach(h => {
-      if (response.headers[h]) {
-        res.setHeader(h, response.headers[h]);
-      }
-    });
-
-    response.data.pipe(res);
-  } catch (error) {
-    console.error('[Proxy Stream] Error:', error.message);
-    res.status(500).send('Error streaming media: ' + error.message);
-  }
-});
 
 // Default fallback
 app.use((req, res) => {
@@ -268,7 +191,6 @@ app.listen(PORT, () => {
   console.log(`\n🚀 CineRift Stream Backend is running on port ${PORT}`);
   console.log(`🔌 API endpoint (Play): http://localhost:${PORT}/api/play`);
   console.log(`🔌 API endpoint (Caption): http://localhost:${PORT}/api/caption`);
-  console.log(`🔌 API endpoint (CORS Proxy): http://localhost:${PORT}/api/proxy?url=ENCODED_URL\n`);
   
   // Prime the proxy list asynchronously in the background
   refreshProxyList();
