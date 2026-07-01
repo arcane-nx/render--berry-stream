@@ -50,7 +50,7 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
         ...axiosConfig,
         url: targetUrl,
         proxy: { host, port: parseInt(port) },
-        timeout: 6000
+        timeout: 4500
       });
       return response;
     } catch (e) {
@@ -64,31 +64,38 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
     await refreshProxyList();
   }
 
-  // Loop through proxy list and test up to 10 random proxies
-  const shuffled = [...proxyList].sort(() => 0.5 - Math.random()).slice(0, 15);
-  for (const proxyStr of shuffled) {
+  const shuffled = [...proxyList].sort(() => 0.5 - Math.random()).slice(0, 20);
+  console.log(`[Proxy Rotator] Kicking off parallel tests on ${shuffled.length} proxies concurrently...`);
+
+  // Create parallel promises
+  const promises = shuffled.map(proxyStr => {
     const [host, port] = proxyStr.split(':');
-    console.log(`[Proxy Rotator] Testing proxy: ${proxyStr} for URL: ${targetUrl}`);
-    try {
-      const response = await axios({
-        ...axiosConfig,
-        url: targetUrl,
-        proxy: { host, port: parseInt(port) },
-        timeout: 5000
-      });
-      
-      // Found a working proxy! Cache it.
-      activeProxy = proxyStr;
-      console.log(`[Proxy Rotator] Cached working proxy: ${proxyStr}`);
-      return response;
-    } catch (e) {
-      // Remove failed proxy from local list
-      proxyList = proxyList.filter(p => p !== proxyStr);
-    }
+    return axios({
+      ...axiosConfig,
+      url: targetUrl,
+      proxy: { host, port: parseInt(port) },
+      timeout: 5000
+    }).then(response => {
+      // Check if response contains valid play/caption data, otherwise reject to try next proxy
+      if (response.data && response.data.code === 429) {
+        throw new Error('Proxy blocked with 429');
+      }
+      return { response, proxyStr };
+    });
+  });
+
+  try {
+    // Promise.any resolves as soon as the first proxy responds successfully!
+    const result = await Promise.any(promises);
+    activeProxy = result.proxyStr;
+    console.log(`[Proxy Rotator] Found working proxy concurrently: ${result.proxyStr}`);
+    return result.response;
+  } catch (err) {
+    console.warn('[Proxy Rotator] All parallel proxy tests failed or timed out.');
   }
 
-  // Last resort: Fallback to direct request (might fail with 403 on hosting provider, but acts as final option)
-  console.warn('[Proxy Rotator] No working proxies found. Attempting direct connection...');
+  // Last resort: Fallback to direct request (might fail with 403, but acts as final option)
+  console.warn('[Proxy Rotator] Attempting direct connection...');
   return await axios({
     ...axiosConfig,
     url: targetUrl,
@@ -195,9 +202,6 @@ app.get('/api/proxy', async (req, res) => {
   }
 
   try {
-    // Note: Streaming video segments (.ts / .mp4) do not need to use proxy rotation,
-    // because video CDNs (like aoneroom / hakunaymatata) do not block hosting provider IPs!
-    // CDNs only verify the User-Agent / Referer, which we forward.
     const response = await axios({
       method: 'get',
       url: targetUrl.href,
