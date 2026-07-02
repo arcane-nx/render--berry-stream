@@ -21,8 +21,18 @@ app.use((req, res, next) => {
   next();
 });
 
-// Proxy Rotation State
-let proxyList = [];
+// Proxy Rotation State with fallback default proxies to prevent cold-boot fetch blocking
+let proxyList = [
+  '45.174.93.130:999',
+  '103.152.112.162:80',
+  '103.83.232.122:80',
+  '117.250.3.58:80',
+  '43.200.77.123:3128',
+  '20.206.106.192:80',
+  '20.219.180.149:3128',
+  '20.24.43.214:80',
+  '20.205.61.143:80'
+];
 let activeProxy = null; // Currently cached working proxy
 
 // Fetch free public HTTP proxies
@@ -59,9 +69,9 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
     }
   }
 
-  // Load proxy list if empty
+  // Load proxy list in background if empty (do not block)
   if (proxyList.length === 0) {
-    await refreshProxyList();
+    refreshProxyList();
   }
 
   const shuffled = [...proxyList].sort(() => 0.5 - Math.random()).slice(0, 20);
