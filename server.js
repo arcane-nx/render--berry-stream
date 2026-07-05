@@ -35,12 +35,12 @@ let proxyList = [
 ];
 let activeProxy = null; // Currently cached working proxy
 
-// Fetch free public HTTP proxies from multiple hourly-updated GitHub sources and ProxyScrape
+// Fetch free public HTTPS-only proxies from verified GitHub sources and ProxyScrape
 async function refreshProxyList() {
   console.log('[Proxy Rotator] Fetching free proxy list...');
   const sources = [
-    'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
-    'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt',
+    'https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt',
+    'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',
     'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=3000&country=all&ssl=yes&anonymity=anonymous'
   ];
 
@@ -55,7 +55,7 @@ async function refreshProxyList() {
         .filter(p => p && p.includes(':'));
       if (list.length > 0) {
         mergedList = mergedList.concat(list);
-        console.log(`[Proxy Rotator] Loaded ${list.length} proxies from source: ${source}`);
+        console.log(`[Proxy Rotator] Loaded ${list.length} HTTPS proxies from source: ${source}`);
       }
     } catch (err) {
       console.warn(`[Proxy Rotator] Failed to fetch from source ${source}: ${err.message}`);
@@ -66,7 +66,7 @@ async function refreshProxyList() {
   const unique = Array.from(new Set(mergedList));
   if (unique.length > 0) {
     proxyList = unique;
-    console.log(`[Proxy Rotator] Successfully loaded a total of ${unique.length} unique proxies.`);
+    console.log(`[Proxy Rotator] Successfully loaded a total of ${unique.length} unique HTTPS proxies.`);
   } else {
     console.error('[Proxy Rotator] Could not load any proxies from any sources.');
   }
@@ -130,7 +130,7 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
   const batchSize = 3;
   console.log(`[Proxy Rotator] Testing proxies in batches of ${batchSize}...`);
 
-  for (let i = 0; i < shuffled.length && i < 6; i += batchSize) {
+  for (let i = 0; i < shuffled.length && i < 15; i += batchSize) {
     const batch = shuffled.slice(i, i + batchSize);
     console.log(`[Proxy Rotator] Testing batch: ${batch.join(', ')}`);
     
