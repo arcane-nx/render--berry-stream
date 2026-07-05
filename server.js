@@ -52,8 +52,12 @@ async function refreshProxyList() {
 
 // Perform request through proxy rotating fallback
 async function requestWithProxy(targetUrl, axiosConfig = {}) {
+  const isPlayUrl = targetUrl.includes('/subject/play');
+  let fallbackResponse = null;
+
   // 1. Try a quick direct connection first. If it is not blocked by the API target (e.g. returns 200),
-  // we bypass all proxy overhead and respond instantly!
+  // we bypass all proxy overhead. However, if it's a play URL and returns no resources (possibly geoblocked),
+  // we keep it as a fallback but still search for a working proxy.
   console.log('[Proxy Rotator] Attempting quick direct connection first...');
   try {
     const directResponse = await axios({
@@ -62,8 +66,13 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
       timeout: 2500
     });
     if (directResponse.data && directResponse.data.code !== 403 && directResponse.data.code !== 429) {
-      console.log('[Proxy Rotator] Direct connection succeeded.');
-      return directResponse;
+      if (isPlayUrl && (!directResponse.data.data || !directResponse.data.data.hasResource)) {
+        console.log('[Proxy Rotator] Direct connection returned no stream resources (possibly geoblocked). Will try proxy rotator.');
+        fallbackResponse = directResponse;
+      } else {
+        console.log('[Proxy Rotator] Direct connection succeeded.');
+        return directResponse;
+      }
     }
   } catch (directError) {
     console.log(`[Proxy Rotator] Direct connection failed or timed out: ${directError.message}. Proceeding to proxy rotation.`);
@@ -79,7 +88,11 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
         proxy: { host, port: parseInt(port) },
         timeout: 3000
       });
-      return response;
+      if (!isPlayUrl || (response.data && response.data.data && response.data.data.hasResource)) {
+        return response;
+      }
+      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} returned no active resources.`);
+      activeProxy = null;
     } catch (e) {
       console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} failed: ${e.message}. Removing from cache.`);
       activeProxy = null;
@@ -110,6 +123,9 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
         if (response.data && response.data.code === 429) {
           throw new Error('Proxy blocked with 429');
         }
+        if (isPlayUrl && (!response.data || !response.data.data || !response.data.data.hasResource)) {
+          throw new Error('Proxy returned no active resources (possibly geoblocked)');
+        }
         return { response, proxyStr };
       });
     });
@@ -124,7 +140,12 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
     }
   }
 
-  // Last resort: Fallback to direct request
+  // Last resort: Fallback to direct response if it succeeded, otherwise attempt final direct connection
+  if (fallbackResponse) {
+    console.warn('[Proxy Rotator] All proxy batches failed. Falling back to the direct connection response.');
+    return fallbackResponse;
+  }
+
   console.warn('[Proxy Rotator] All proxy batches failed. Attempting final direct connection...');
   return await axios({
     ...axiosConfig,
