@@ -35,18 +35,40 @@ let proxyList = [
 ];
 let activeProxy = null; // Currently cached working proxy
 
-// Fetch free public HTTP proxies
+// Fetch free public HTTP proxies from multiple hourly-updated GitHub sources and ProxyScrape
 async function refreshProxyList() {
   console.log('[Proxy Rotator] Fetching free proxy list...');
-  try {
-    const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=3000&country=all&ssl=yes&anonymity=anonymous', { timeout: 8000 });
-    const list = res.data.split('\n').map(p => p.trim()).filter(Boolean);
-    if (list.length > 0) {
-      proxyList = list;
-      console.log(`[Proxy Rotator] Successfully loaded ${list.length} proxies.`);
+  const sources = [
+    'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+    'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt',
+    'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=3000&country=all&ssl=yes&anonymity=anonymous'
+  ];
+
+  let mergedList = [];
+
+  for (const source of sources) {
+    try {
+      const res = await axios.get(source, { timeout: 6000 });
+      const list = res.data
+        .split('\n')
+        .map(p => p.trim())
+        .filter(p => p && p.includes(':'));
+      if (list.length > 0) {
+        mergedList = mergedList.concat(list);
+        console.log(`[Proxy Rotator] Loaded ${list.length} proxies from source: ${source}`);
+      }
+    } catch (err) {
+      console.warn(`[Proxy Rotator] Failed to fetch from source ${source}: ${err.message}`);
     }
-  } catch (err) {
-    console.error('[Proxy Rotator] Failed to fetch proxy list:', err.message);
+  }
+
+  // De-duplicate the list
+  const unique = Array.from(new Set(mergedList));
+  if (unique.length > 0) {
+    proxyList = unique;
+    console.log(`[Proxy Rotator] Successfully loaded a total of ${unique.length} unique proxies.`);
+  } else {
+    console.error('[Proxy Rotator] Could not load any proxies from any sources.');
   }
 }
 
