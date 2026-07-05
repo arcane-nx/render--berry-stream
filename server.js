@@ -77,10 +77,33 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
   const isPlayUrl = targetUrl.includes('/subject/play');
   let fallbackResponse = null;
 
-  // 1. Try a quick direct connection first. If it is not blocked by the API target (e.g. returns 200),
+  // 1. If we already have a cached working proxy, try it first to keep response times fast!
+  if (activeProxy) {
+    const [host, port] = activeProxy.split(':');
+    console.log(`[Proxy Rotator] Attempting cached working proxy first: ${activeProxy}...`);
+    try {
+      const response = await axios({
+        ...axiosConfig,
+        url: targetUrl,
+        proxy: { host, port: parseInt(port) },
+        timeout: 3000
+      });
+      if (!isPlayUrl || (response.data && response.data.data && response.data.data.hasResource)) {
+        console.log(`[Proxy Rotator] Cached working proxy succeeded: ${activeProxy}`);
+        return response;
+      }
+      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} returned no active resources.`);
+      activeProxy = null;
+    } catch (e) {
+      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} failed: ${e.message}. Removing from cache.`);
+      activeProxy = null;
+    }
+  }
+
+  // 2. Try a quick direct connection next. If it is not blocked by the API target (e.g. returns 200),
   // we bypass all proxy overhead. However, if it's a play URL and returns no resources (possibly geoblocked),
   // we keep it as a fallback but still search for a working proxy.
-  console.log('[Proxy Rotator] Attempting quick direct connection first...');
+  console.log('[Proxy Rotator] Attempting quick direct connection...');
   try {
     const directResponse = await axios({
       ...axiosConfig,
@@ -98,27 +121,6 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
     }
   } catch (directError) {
     console.log(`[Proxy Rotator] Direct connection failed or timed out: ${directError.message}. Proceeding to proxy rotation.`);
-  }
-
-  // 2. If we already have a cached working proxy, try it next to keep response times fast!
-  if (activeProxy) {
-    const [host, port] = activeProxy.split(':');
-    try {
-      const response = await axios({
-        ...axiosConfig,
-        url: targetUrl,
-        proxy: { host, port: parseInt(port) },
-        timeout: 3000
-      });
-      if (!isPlayUrl || (response.data && response.data.data && response.data.data.hasResource)) {
-        return response;
-      }
-      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} returned no active resources.`);
-      activeProxy = null;
-    } catch (e) {
-      console.warn(`[Proxy Rotator] Cached proxy ${activeProxy} failed: ${e.message}. Removing from cache.`);
-      activeProxy = null;
-    }
   }
 
   // 3. Load proxy list in background if empty (do not block)
