@@ -52,7 +52,24 @@ async function refreshProxyList() {
 
 // Perform request through proxy rotating fallback
 async function requestWithProxy(targetUrl, axiosConfig = {}) {
-  // If we already have a cached working proxy, try it first to keep response times fast!
+  // 1. Try a quick direct connection first. If it is not blocked by the API target (e.g. returns 200),
+  // we bypass all proxy overhead and respond instantly!
+  console.log('[Proxy Rotator] Attempting quick direct connection first...');
+  try {
+    const directResponse = await axios({
+      ...axiosConfig,
+      url: targetUrl,
+      timeout: 2500
+    });
+    if (directResponse.data && directResponse.data.code !== 403 && directResponse.data.code !== 429) {
+      console.log('[Proxy Rotator] Direct connection succeeded.');
+      return directResponse;
+    }
+  } catch (directError) {
+    console.log(`[Proxy Rotator] Direct connection failed or timed out: ${directError.message}. Proceeding to proxy rotation.`);
+  }
+
+  // 2. If we already have a cached working proxy, try it next to keep response times fast!
   if (activeProxy) {
     const [host, port] = activeProxy.split(':');
     try {
@@ -60,7 +77,7 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
         ...axiosConfig,
         url: targetUrl,
         proxy: { host, port: parseInt(port) },
-        timeout: 4500
+        timeout: 3000
       });
       return response;
     } catch (e) {
@@ -69,43 +86,46 @@ async function requestWithProxy(targetUrl, axiosConfig = {}) {
     }
   }
 
-  // Load proxy list in background if empty (do not block)
+  // 3. Load proxy list in background if empty (do not block)
   if (proxyList.length === 0) {
     refreshProxyList();
   }
 
-  const shuffled = [...proxyList].sort(() => 0.5 - Math.random()).slice(0, 20);
-  console.log(`[Proxy Rotator] Kicking off parallel tests on ${shuffled.length} proxies concurrently...`);
+  const shuffled = [...proxyList].sort(() => 0.5 - Math.random());
+  const batchSize = 3;
+  console.log(`[Proxy Rotator] Testing proxies in batches of ${batchSize}...`);
 
-  // Create parallel promises
-  const promises = shuffled.map(proxyStr => {
-    const [host, port] = proxyStr.split(':');
-    return axios({
-      ...axiosConfig,
-      url: targetUrl,
-      proxy: { host, port: parseInt(port) },
-      timeout: 5000
-    }).then(response => {
-      // Check if response contains valid play/caption data, otherwise reject to try next proxy
-      if (response.data && response.data.code === 429) {
-        throw new Error('Proxy blocked with 429');
-      }
-      return { response, proxyStr };
+  for (let i = 0; i < shuffled.length && i < 6; i += batchSize) {
+    const batch = shuffled.slice(i, i + batchSize);
+    console.log(`[Proxy Rotator] Testing batch: ${batch.join(', ')}`);
+    
+    const promises = batch.map(proxyStr => {
+      const [host, port] = proxyStr.split(':');
+      return axios({
+        ...axiosConfig,
+        url: targetUrl,
+        proxy: { host, port: parseInt(port) },
+        timeout: 3000
+      }).then(response => {
+        if (response.data && response.data.code === 429) {
+          throw new Error('Proxy blocked with 429');
+        }
+        return { response, proxyStr };
+      });
     });
-  });
 
-  try {
-    // Promise.any resolves as soon as the first proxy responds successfully!
-    const result = await Promise.any(promises);
-    activeProxy = result.proxyStr;
-    console.log(`[Proxy Rotator] Found working proxy concurrently: ${result.proxyStr}`);
-    return result.response;
-  } catch (err) {
-    console.warn('[Proxy Rotator] All parallel proxy tests failed or timed out.');
+    try {
+      const result = await Promise.any(promises);
+      activeProxy = result.proxyStr;
+      console.log(`[Proxy Rotator] Found working proxy in batch: ${result.proxyStr}`);
+      return result.response;
+    } catch (e) {
+      console.warn(`[Proxy Rotator] Batch starting at index ${i} failed or timed out. Trying next batch...`);
+    }
   }
 
-  // Last resort: Fallback to direct request (might fail with 403, but acts as final option)
-  console.warn('[Proxy Rotator] Attempting direct connection...');
+  // Last resort: Fallback to direct request
+  console.warn('[Proxy Rotator] All proxy batches failed. Attempting final direct connection...');
   return await axios({
     ...axiosConfig,
     url: targetUrl,
