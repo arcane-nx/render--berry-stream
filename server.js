@@ -56,7 +56,6 @@ app.get('/api/play', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Missing subjectId or detailPath' });
   }
 
-  const cat = category || 'movies';
   const season = parseInt(se) || 0;
   const episode = parseInt(ep) || 0;
 
@@ -72,7 +71,7 @@ app.get('/api/play', async (req, res) => {
         ...DEFAULT_HEADERS,
         Cookie: sessionCookies,
         Origin: 'https://fmoviesunblocked.net',
-        Referer: `https://fmoviesunblocked.net/spa/videoPlayPage/${cat}/${detailPath}?id=${subjectId}&type=/movie/detail`
+        Referer: `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${detailPath}?id=${subjectId}&type=/movie/detail`
       },
       timeout: 15000
     });
@@ -103,12 +102,11 @@ app.get('/api/play', async (req, res) => {
 
 // 2. Caption Subtitle Endpoint Proxy
 app.get('/api/caption', async (req, res) => {
-  const { id, subjectId, detailPath, format, category } = req.query;
+  const { id, subjectId, detailPath, format } = req.query;
   if (!id || !subjectId || !detailPath) {
     return res.status(400).json({ success: false, message: 'Missing stream id, subjectId, or detailPath' });
   }
 
-  const cat = category || 'movies';
   const fmt = format || 'MP4';
 
   console.log(`[Stream Backend] Caption request: stream ID ${id}`);
@@ -122,7 +120,7 @@ app.get('/api/caption', async (req, res) => {
         ...DEFAULT_HEADERS,
         Cookie: sessionCookies,
         Origin: 'https://fmoviesunblocked.net',
-        Referer: `https://fmoviesunblocked.net/spa/videoPlayPage/${cat}/${detailPath}?id=${subjectId}&type=/movie/detail`
+        Referer: `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${detailPath}?id=${subjectId}&type=/movie/detail`
       },
       timeout: 15000
     });
