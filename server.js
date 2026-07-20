@@ -1,6 +1,9 @@
 import express from 'express';
 import axios from 'axios';
 
+// Force Axios to use IPv4 to bypass broken or blocked IPv6 routes
+axios.defaults.family = 4;
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -78,12 +81,22 @@ app.get('/api/play', async (req, res) => {
 
     const data = response.data?.data || {};
     const downloads = data.downloads || [];
+    const captions = data.captions || [];
 
     // Map downloads format to the play format expected by the frontend
     const streams = downloads.map(d => ({
       id: d.id,
       url: d.url,
-      resolutions: String(d.resolution || '720')
+      resolution: String(d.resolution || '720'),
+      size: d.size || null
+    }));
+
+    // Map caption track details directly
+    const subtitleTracks = captions.map(c => ({
+      id: c.id,
+      language: c.lanName || 'Unknown',
+      code: c.lan || 'en',
+      url: c.url
     }));
 
     res.json({
@@ -91,7 +104,10 @@ app.get('/api/play', async (req, res) => {
       data: {
         hasResource: streams.length > 0,
         streams: streams,
-        hls: []
+        captions: subtitleTracks,
+        freeNum: data.freeNum ?? 0,
+        limited: data.limited ?? false,
+        limitedCode: data.limitedCode || ''
       }
     });
   } catch (error) {
