@@ -14,10 +14,7 @@ const DEFAULT_HEADERS = {
   "User-Agent": "okhttp/4.12.0",
   Referer: "https://h5.aoneroom.com",
   Host: "h5.aoneroom.com",
-  Connection: "keep-alive",
-  "X-Forwarded-For": "1.1.1.1",
-  "CF-Connecting-IP": "1.1.1.1",
-  "X-Real-IP": "1.1.1.1",
+  Connection: "keep-alive"
 };
 
 // Global CORS Middleware
@@ -33,18 +30,18 @@ app.use((req, res, next) => {
 
 let sessionCookies = '';
 
-async function ensureCookiesAreAssigned() {
-  if (!sessionCookies) {
-    console.log('[Cookies] Initializing session cookies...');
+async function ensureCookiesAreAssigned(forceRefresh = false) {
+  if (!sessionCookies || forceRefresh) {
+    console.log(`[Cookies] ${forceRefresh ? 'Refreshing' : 'Initializing'} session cookies...`);
     try {
-      const res = await axios.get('https://h5.aoneroom.com/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox', {
+      const res = await axios.get(`https://h5.aoneroom.com/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox&t=${Date.now()}_${Math.random()}`, {
         headers: DEFAULT_HEADERS,
         timeout: 10000
       });
       const setCookie = res.headers['set-cookie'];
       if (setCookie) {
         sessionCookies = setCookie.map(c => c.split(';')[0]).join('; ');
-        console.log('[Cookies] Session cookies initialized successfully.');
+        console.log('[Cookies] Session cookies assigned successfully.');
       }
     } catch (err) {
       console.error('[Cookies] Failed to initialize session cookies:', err.message);
@@ -69,7 +66,7 @@ app.get('/api/play', async (req, res) => {
 
     // Fetch stream resources (downloads) using Referer and Origin spoofing
     const playUrl = `https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download?subjectId=${subjectId}&se=${season}&ep=${episode}`;
-    const response = await axios.get(playUrl, {
+    let response = await axios.get(playUrl, {
       headers: {
         ...DEFAULT_HEADERS,
         Cookie: sessionCookies,
@@ -79,9 +76,27 @@ app.get('/api/play', async (req, res) => {
       timeout: 15000
     });
 
-    const data = response.data?.data || {};
-    const downloads = data.downloads || [];
-    const captions = data.captions || [];
+    let data = response.data?.data || {};
+    let downloads = data.downloads || [];
+    let captions = data.captions || [];
+
+    // If upstream marked response as limited or returned 0 streams, refresh session cookie & retry once
+    if ((data.limited || downloads.length === 0)) {
+      console.warn(`[Stream Backend] Limited or 0 streams for ${subjectId} S${season}E${episode}. Refreshing guest session cookie...`);
+      await ensureCookiesAreAssigned(true);
+      response = await axios.get(playUrl, {
+        headers: {
+          ...DEFAULT_HEADERS,
+          Cookie: sessionCookies,
+          Origin: 'https://fmoviesunblocked.net',
+          Referer: `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${detailPath}?id=${subjectId}&type=/movie/detail`
+        },
+        timeout: 15000
+      });
+      data = response.data?.data || {};
+      downloads = data.downloads || [];
+      captions = data.captions || [];
+    }
 
     // Map downloads format to the play format expected by the frontend
     const streams = downloads.map(d => ({
